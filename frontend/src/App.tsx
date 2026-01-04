@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  CloudArrowUpIcon, DocumentTextIcon, EyeIcon, MoonIcon, SunIcon, 
+  CloudArrowUpIcon, EyeIcon, MoonIcon, SunIcon, 
   ArrowPathIcon, ClipboardDocumentCheckIcon 
 } from '@heroicons/react/24/outline';
 
@@ -29,7 +29,7 @@ const App = () => {
     cvFiles.forEach(f => formData.append('cv_files', f));
 
     try {
-      // PENTING: Gunakan path relatif /api/ untuk Vercel
+      // Path relatif agar bekerja dengan rewrite vercel.json
       const res = await axios.post('/api/match', formData);
       setResults(res.data.results);
     } catch (e) {
@@ -99,7 +99,10 @@ const App = () => {
                     </td>
                     <td className="p-5 text-center">
                       <button 
-                        onClick={() => window.open(URL.createObjectURL(cvFiles.find(f => f.name === res.filename)!))}
+                        onClick={() => {
+                          const file = cvFiles.find(f => f.name === res.filename);
+                          if(file) window.open(URL.createObjectURL(file));
+                        }}
                         className="p-2 bg-slate-100 dark:bg-slate-800 rounded-lg hover:bg-blue-500 hover:text-white transition-colors"
                       >
                         <EyeIcon className="w-5 h-5" />
