@@ -1,6 +1,7 @@
+--no-cache-dir
 fastapi==0.110.0
 python-multipart==0.0.9
-sentence-transformers==2.5.1
 PyPDF2==3.0.1
-torch
+sentence-transformers==2.5.1
+torch --index-url https://download.pytorch.org/whl/cpu
 numpy==1.26.4
