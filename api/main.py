@@ -2,15 +2,13 @@ import io
 import re
 import numpy as np
 import PyPDF2
+import onnxruntime as ort
+from transformers import AutoTokenizer
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-# Menggunakan Optimum untuk menjalankan model tanpa library Torch
-from optimum.onnxruntime import ORTModelForFeatureExtraction
-from transformers import AutoTokenizer
 
 app = FastAPI()
 
-# Izinkan CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,28 +16,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# KUNCI PERBAIKAN: Gunakan ONNX Runtime agar hemat RAM
-# Model akan ditarik dari Hugging Face
+# Gunakan model ID Hugging Face Anda
 MODEL_NAME = "lilcoderi/cv-matcher-fine-tuned"
 
-# Memuat Tokenizer dan Model format ONNX
-# export=True akan mengonversi model secara otomatis saat pertama kali dimuat
+# Load Tokenizer dan Session ONNX secara manual untuk menghemat RAM
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = ORTModelForFeatureExtraction.from_pretrained(MODEL_ID, export=True)
+
+# Inisialisasi session tanpa menggunakan library Optimum yang berat
+# Pastikan file model.onnx sudah ada di Hugging Face Anda
+try:
+    # Menggunakan provider CPU agar hemat memori
+    session = ort.InferenceSession(
+        f"https://huggingface.co/{MODEL_NAME}/resolve/main/model.onnx", 
+        providers=['CPUExecutionProvider']
+    )
+except:
+    # Fallback jika model.onnx belum tersedia secara direct link
+    # Anda harus mengonversi model ke ONNX terlebih dahulu
+    session = None
 
 THRESHOLD = 0.58
 
-# Regex patterns
-RE_CLEAN = re.compile(r'[•\-*●▪◦☑]')
-RE_SPACES = re.compile(r'\s+')
-RE_NON_ALPHA = re.compile(r'[^\w\s]')
-
 def clean_text(text: str) -> str:
     text = text.lower()
-    text = RE_CLEAN.sub(' ', text)
+    text = re.sub(r'[•\-*●▪◦☑]', ' ', text)
     text = text.encode("ascii", "ignore").decode()
-    text = RE_NON_ALPHA.sub(' ', text)
-    return RE_SPACES.sub(' ', text).strip()
+    text = re.sub(r'[^\w\s]', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 def standardize_education(text: str) -> str:
     edu_map = {
@@ -49,15 +52,6 @@ def standardize_education(text: str) -> str:
     }
     for pattern, replacement in edu_map.items():
         text = re.sub(pattern, replacement, text)
-    return text
-
-def clean_job_description(text: str) -> str:
-    noise_patterns = [
-        r'we are hiring', r'send us your cv', r'kirim cv anda',
-        r'hrdptoba@gmail\.com', r'subjek:.*', r'lowongan ini dibuka sampai.*'
-    ]
-    for pattern in noise_patterns:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
     return text
 
 def extract_text_from_pdf(file_bytes, max_pages=3):
@@ -74,27 +68,25 @@ def extract_text_from_pdf(file_bytes, max_pages=3):
         raise HTTPException(status_code=400, detail="Gagal membaca file PDF")
 
 def get_embeddings(text: str):
-    """Menghasilkan vektor embedding menggunakan ONNX Runtime tanpa Torch."""
+    """Menghasilkan embedding menggunakan ONNX Runtime murni tanpa Torch/Optimum."""
     inputs = tokenizer(text, padding=True, truncation=True, return_tensors="np")
-    outputs = model(**inputs)
-    # Mean pooling: Mengambil rata-rata dari hidden states
-    embeddings = outputs.last_hidden_state.mean(axis=1)
-    # Normalisasi vektor agar perhitungan Cosine Similarity akurat
+    # Menyiapkan input untuk ONNX session
+    onnx_inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+    outputs = session.run(None, onnx_inputs)
+    # Mean pooling sederhana menggunakan Numpy
+    embeddings = np.mean(outputs[0], axis=1)
     norm = np.linalg.norm(embeddings, axis=1, keepdims=True)
     return embeddings / norm
 
 @app.post("/match")
-async def match_cvs(
-    job_file: UploadFile = File(...),
-    cv_files: list[UploadFile] = File(...)
-):
-    # 1. Proses Job Description
+async def match_cvs(job_file: UploadFile = File(...), cv_files: list[UploadFile] = File(...)):
+    if session is None:
+        raise HTTPException(status_code=500, detail="Model ONNX belum siap di server")
+
     job_raw = extract_text_from_pdf(await job_file.read(), max_pages=5)
-    job_cleaned = clean_job_description(job_raw)
-    job_final = standardize_education(clean_text(job_cleaned))
+    job_final = standardize_education(clean_text(job_raw))
     job_embedding = get_embeddings(job_final)
     
-    # 2. Proses CV
     results = []
     for cv in cv_files:
         content = await cv.read()
@@ -102,7 +94,6 @@ async def match_cvs(
         processed_text = standardize_education(clean_text(raw_text))
         cv_embedding = get_embeddings(processed_text)
         
-        # Perhitungan Cosine Similarity manual menggunakan Numpy
         score_val = float(np.dot(job_embedding, cv_embedding.T))
         
         results.append({
@@ -112,6 +103,5 @@ async def match_cvs(
             "status": "Cocok" if score_val >= THRESHOLD else "Tidak Cocok"
         })
 
-    # 4. Sortir Hasil
     results.sort(key=lambda x: x['score'], reverse=True)
     return {"results": results}
