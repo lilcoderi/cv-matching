@@ -2,5 +2,6 @@ fastapi==0.110.0
 python-multipart==0.0.9
 PyPDF2==3.0.1
 numpy==1.26.4
-onnxruntime-node
-optimum[onnxruntime]
+onnxruntime==1.17.1
+transformers==4.38.2
+optimum[onnxruntime]==1.17.1

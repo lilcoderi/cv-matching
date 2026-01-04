@@ -1,15 +1,16 @@
 import io
 import re
-import os
-import torch
+import numpy as np
 import PyPDF2
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sentence_transformers import SentenceTransformer, util
+# Menggunakan Optimum untuk menjalankan model tanpa library Torch
+from optimum.onnxruntime import ORTModelForFeatureExtraction
+from transformers import AutoTokenizer
 
 app = FastAPI()
 
-# Izinkan CORS agar frontend bisa memanggil backend
+# Izinkan CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,10 +18,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# KUNCI PERBAIKAN: Gunakan ID Hugging Face, bukan path lokal
-# Vercel akan mendownload ini ke RAM, sehingga tidak akan Out of Memory saat build
+# KUNCI PERBAIKAN: Gunakan ONNX Runtime agar hemat RAM
+# Model akan ditarik dari Hugging Face
 MODEL_NAME = "lilcoderi/cv-matcher-fine-tuned"
-model = SentenceTransformer(MODEL_NAME)
+
+# Memuat Tokenizer dan Model format ONNX
+# export=True akan mengonversi model secara otomatis saat pertama kali dimuat
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = ORTModelForFeatureExtraction.from_pretrained(MODEL_ID, export=True)
 
 THRESHOLD = 0.58
 
@@ -68,6 +73,16 @@ def extract_text_from_pdf(file_bytes, max_pages=3):
     except Exception:
         raise HTTPException(status_code=400, detail="Gagal membaca file PDF")
 
+def get_embeddings(text: str):
+    """Menghasilkan vektor embedding menggunakan ONNX Runtime tanpa Torch."""
+    inputs = tokenizer(text, padding=True, truncation=True, return_tensors="np")
+    outputs = model(**inputs)
+    # Mean pooling: Mengambil rata-rata dari hidden states
+    embeddings = outputs.last_hidden_state.mean(axis=1)
+    # Normalisasi vektor agar perhitungan Cosine Similarity akurat
+    norm = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    return embeddings / norm
+
 @app.post("/match")
 async def match_cvs(
     job_file: UploadFile = File(...),
@@ -77,37 +92,26 @@ async def match_cvs(
     job_raw = extract_text_from_pdf(await job_file.read(), max_pages=5)
     job_cleaned = clean_job_description(job_raw)
     job_final = standardize_education(clean_text(job_cleaned))
+    job_embedding = get_embeddings(job_final)
     
     # 2. Proses CV
-    cv_texts_processed = []
-    filenames = []
-
+    results = []
     for cv in cv_files:
         content = await cv.read()
         raw_text = extract_text_from_pdf(content, max_pages=3)
         processed_text = standardize_education(clean_text(raw_text))
-        cv_texts_processed.append(processed_text)
-        filenames.append(cv.filename)
-
-    if not cv_texts_processed:
-        raise HTTPException(status_code=400, detail="Tidak ada CV yang valid")
-
-    # 3. Analisis dengan AI
-    with torch.no_grad():
-        job_embedding = model.encode(job_final, convert_to_tensor=True, normalize_embeddings=True)
-        cv_embeddings = model.encode(cv_texts_processed, convert_to_tensor=True, normalize_embeddings=True)
-        scores = util.cos_sim(job_embedding, cv_embeddings)[0]
-
-    # 4. Result
-    results = []
-    for i in range(len(filenames)):
-        score_val = float(scores[i])
+        cv_embedding = get_embeddings(processed_text)
+        
+        # Perhitungan Cosine Similarity manual menggunakan Numpy
+        score_val = float(np.dot(job_embedding, cv_embedding.T))
+        
         results.append({
-            "filename": filenames[i],
+            "filename": cv.filename,
             "score": round(score_val, 4),
             "percentage": round(score_val * 100, 2),
             "status": "Cocok" if score_val >= THRESHOLD else "Tidak Cocok"
         })
 
+    # 4. Sortir Hasil
     results.sort(key=lambda x: x['score'], reverse=True)
     return {"results": results}
