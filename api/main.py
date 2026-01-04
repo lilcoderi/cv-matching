@@ -3,14 +3,13 @@ import re
 import os
 import torch
 import PyPDF2
-from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer, util
 
 app = FastAPI()
 
-# Izinkan CORS
+# Izinkan CORS agar frontend bisa memanggil backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,26 +17,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inisialisasi variabel model sebagai None (Lazy Loading)
-model = None
+# KUNCI PERBAIKAN: Gunakan ID Hugging Face, bukan path lokal
+# Vercel akan mendownload ini ke RAM, sehingga tidak akan Out of Memory saat build
+MODEL_NAME = "lilcoderi/cv-matcher-fine-tuned"
+model = SentenceTransformer(MODEL_NAME)
+
 THRESHOLD = 0.58
 
-def get_model():
-    """Fungsi untuk memuat model hanya saat dibutuhkan guna menghemat RAM build."""
-    global model
-    if model is None:
-        try:
-            # Menggunakan path absolut ke folder 'model' di dalam direktori 'api'
-            base_dir = Path(__file__).resolve().parent
-            model_path = os.path.join(base_dir, "model")
-            model = SentenceTransformer(model_path)
-        except Exception as e:
-            print(f"Gagal memuat model lokal: {e}")
-            # Fallback jika model lokal bermasalah atau tidak ditemukan
-            model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-    return model
-
-# Pre-compile regex
+# Regex patterns
 RE_CLEAN = re.compile(r'[•\-*●▪◦☑]')
 RE_SPACES = re.compile(r'\s+')
 RE_NON_ALPHA = re.compile(r'[^\w\s]')
@@ -86,9 +73,6 @@ async def match_cvs(
     job_file: UploadFile = File(...),
     cv_files: list[UploadFile] = File(...)
 ):
-    # Panggil model hanya saat endpoint ini diakses
-    current_model = get_model()
-    
     # 1. Proses Job Description
     job_raw = extract_text_from_pdf(await job_file.read(), max_pages=5)
     job_cleaned = clean_job_description(job_raw)
@@ -108,10 +92,10 @@ async def match_cvs(
     if not cv_texts_processed:
         raise HTTPException(status_code=400, detail="Tidak ada CV yang valid")
 
-    # 3. Analisis dengan AI (Tanpa gradien untuk hemat memori)
+    # 3. Analisis dengan AI
     with torch.no_grad():
-        job_embedding = current_model.encode(job_final, convert_to_tensor=True, normalize_embeddings=True)
-        cv_embeddings = current_model.encode(cv_texts_processed, convert_to_tensor=True, normalize_embeddings=True)
+        job_embedding = model.encode(job_final, convert_to_tensor=True, normalize_embeddings=True)
+        cv_embeddings = model.encode(cv_texts_processed, convert_to_tensor=True, normalize_embeddings=True)
         scores = util.cos_sim(job_embedding, cv_embeddings)[0]
 
     # 4. Result
