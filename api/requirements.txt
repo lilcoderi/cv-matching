@@ -2,5 +2,5 @@ fastapi==0.110.0
 python-multipart==0.0.9
 sentence-transformers==2.5.1
 PyPDF2==3.0.1
-torch
 numpy==1.26.4
+https://download.pytorch.org/whl/cpu/torch-2.2.1%2Bcpu-cp310-cp310-linux_x86_64.whl
