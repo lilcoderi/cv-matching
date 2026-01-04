@@ -4,17 +4,11 @@
     {
       "source": "/api/(.*)",
       "destination": "backend/main.py"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/frontend/$1"
     }
   ],
   "functions": {
-    "backend/main.py": {
-      "runtime": "vercel-python@0.0.6",
-      "memory": 1024,
-      "maxDuration": 10
+    "backend/*.py": {
+      "runtime": "vercel-python@0.0.6"
     }
   }
 }
