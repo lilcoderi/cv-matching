@@ -3,11 +3,16 @@ import re
 import numpy as np
 import PyPDF2
 import onnxruntime as ort
+
 from transformers import AutoTokenizer
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from mangum import Mangum
 
-app = FastAPI()
+# =========================
+# FastAPI App
+# =========================
+app = FastAPI(title="CV Matcher API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,27 +21,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Gunakan model ID Hugging Face Anda
+# =========================
+# Model Config
+# =========================
 MODEL_NAME = "lilcoderi/cv-matcher-fine-tuned"
-
-# Load Tokenizer dan Session ONNX secara manual untuk menghemat RAM
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-# Inisialisasi session tanpa menggunakan library Optimum yang berat
-# Pastikan file model.onnx sudah ada di Hugging Face Anda
-try:
-    # Menggunakan provider CPU agar hemat memori
-    session = ort.InferenceSession(
-        f"https://huggingface.co/{MODEL_NAME}/resolve/main/model.onnx", 
-        providers=['CPUExecutionProvider']
-    )
-except:
-    # Fallback jika model.onnx belum tersedia secara direct link
-    # Anda harus mengonversi model ke ONNX terlebih dahulu
-    session = None
-
 THRESHOLD = 0.59
 
+# =========================
+# Load Tokenizer
+# =========================
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+# =========================
+# Load ONNX Model
+# =========================
+try:
+    session = ort.InferenceSession(
+        f"https://huggingface.co/{MODEL_NAME}/resolve/main/model.onnx",
+        providers=["CPUExecutionProvider"]
+    )
+except Exception as e:
+    print("Gagal load ONNX:", e)
+    session = None
+
+# =========================
+# Helper Functions
+# =========================
 def clean_text(text: str) -> str:
     text = text.lower()
     text = re.sub(r'[•\-*●▪◦☑]', ' ', text)
@@ -68,34 +78,57 @@ def extract_text_from_pdf(file_bytes, max_pages=3):
         raise HTTPException(status_code=400, detail="Gagal membaca file PDF")
 
 def get_embeddings(text: str):
-    """Menghasilkan embedding menggunakan ONNX Runtime murni tanpa Torch/Optimum."""
-    inputs = tokenizer(text, padding=True, truncation=True, return_tensors="np")
-    # Menyiapkan input untuk ONNX session
-    onnx_inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+    """
+    Generate embedding menggunakan ONNX Runtime
+    tanpa Torch & Optimum (RAM-friendly)
+    """
+    inputs = tokenizer(
+        text,
+        padding=True,
+        truncation=True,
+        return_tensors="np"
+    )
+
+    onnx_inputs = {
+        k: v.astype(np.int64)
+        for k, v in inputs.items()
+    }
+
     outputs = session.run(None, onnx_inputs)
-    # Mean pooling sederhana menggunakan Numpy
+
+    # Mean pooling
     embeddings = np.mean(outputs[0], axis=1)
     norm = np.linalg.norm(embeddings, axis=1, keepdims=True)
     return embeddings / norm
 
+# =========================
+# API Endpoint
+# =========================
 @app.post("/match")
-async def match_cvs(job_file: UploadFile = File(...), cv_files: list[UploadFile] = File(...)):
+async def match_cvs(
+    job_file: UploadFile = File(...),
+    cv_files: list[UploadFile] = File(...)
+):
     if session is None:
-        raise HTTPException(status_code=500, detail="Model ONNX belum siap di server")
+        raise HTTPException(
+            status_code=500,
+            detail="Model ONNX belum siap di server"
+        )
 
+    # Job description
     job_raw = extract_text_from_pdf(await job_file.read(), max_pages=5)
     job_final = standardize_education(clean_text(job_raw))
     job_embedding = get_embeddings(job_final)
-    
+
     results = []
+
     for cv in cv_files:
-        content = await cv.read()
-        raw_text = extract_text_from_pdf(content, max_pages=3)
+        raw_text = extract_text_from_pdf(await cv.read(), max_pages=3)
         processed_text = standardize_education(clean_text(raw_text))
         cv_embedding = get_embeddings(processed_text)
-        
+
         score_val = float(np.dot(job_embedding, cv_embedding.T))
-        
+
         results.append({
             "filename": cv.filename,
             "score": round(score_val, 4),
@@ -103,5 +136,10 @@ async def match_cvs(job_file: UploadFile = File(...), cv_files: list[UploadFile]
             "status": "Cocok" if score_val >= THRESHOLD else "Tidak Cocok"
         })
 
-    results.sort(key=lambda x: x['score'], reverse=True)
+    results.sort(key=lambda x: x["score"], reverse=True)
     return {"results": results}
+
+# =========================
+# Vercel Handler
+# =========================
+handler = Mangum(app)
