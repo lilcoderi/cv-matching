@@ -35,7 +35,7 @@ except:
     # Anda harus mengonversi model ke ONNX terlebih dahulu
     session = None
 
-THRESHOLD = 0.58
+THRESHOLD = 0.59
 
 def clean_text(text: str) -> str:
     text = text.lower()
