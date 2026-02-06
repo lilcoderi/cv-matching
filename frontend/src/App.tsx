@@ -50,7 +50,7 @@ const App = () => {
       <header className="h-20 bg-white dark:bg-slate-900 border-b dark:border-slate-800 flex items-center justify-between px-8 sticky top-0 z-50 shadow-sm">
         <div className="flex items-center gap-4">
           <img src="/logo_ptoba.png" className="h-10 w-auto bg-white p-1 rounded shadow-sm" alt="Logo" />
-          <h1 className="text-xl font-bold tracking-tight">Recruitment Matcher</h1>
+          <h1 className="text-xl font-bold tracking-tight">Curriculum Vitae Matcher</h1>
         </div>
         <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 rounded-full">
           {isDarkMode ? <SunIcon className="w-6 h-6 text-yellow-500" /> : <MoonIcon className="w-6 h-6 text-slate-600" />}
@@ -76,7 +76,7 @@ const App = () => {
 
         <button onClick={handleProcess} disabled={loading} className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl flex justify-center items-center gap-4 disabled:bg-slate-400">
           {loading ? <ArrowPathIcon className="w-7 h-7 animate-spin" /> : <ClipboardDocumentCheckIcon className="w-7 h-7" />}
-          <span>{loading ? "Menganalisis..." : "Mulai Ranking"}</span>
+          <span>{loading ? "Menganalisis..." : "Mulai Pencocokan & Ranking"}</span>
         </button>
 
         {results.length > 0 && (
