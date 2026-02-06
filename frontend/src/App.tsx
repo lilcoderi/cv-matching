@@ -29,12 +29,17 @@ const App = () => {
     cvFiles.forEach(f => formData.append('cv_files', f));
 
     try {
-      // Path relatif agar bekerja dengan rewrite vercel.json
-      const res = await axios.post('/api/match', formData);
+      // Ganti dengan URL Space kamu
+      const res = await axios.post('https://lilcoderi-cv-matcher-app.hf.space/match', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        }
+      });
+      
       setResults(res.data.results);
     } catch (e) {
       console.error(e);
-      alert("Gagal memproses data. Pastikan backend berjalan.");
+      alert("Gagal terhubung ke backend Hugging Face!");
     } finally {
       setLoading(false);
     }
